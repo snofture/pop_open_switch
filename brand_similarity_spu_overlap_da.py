@@ -44,7 +44,7 @@ all_sku_match = all_sku_match.distinct()
 
 # 汇总sku匹配数目
 sku_match = all_sku_match.groupby('item_third_cate_cd1','brand_code1','brand_name1','brand_code2','brand_name2').agg(countDistinct(all_sku_match.main_sku_id1).alias('match_sku_num')).cache()
-sku_match = sku_match.sort('item_third_cate_cd1','brand_code1','match_sku_num')
+#sku_match = sku_match.sort('item_third_cate_cd1','brand_code1','match_sku_num')
 
 
 brand_sku_num_query = '''select cid3 as item_third_cate_cd1,brand_code as brand_code1, count(distinct sku_id)as sku_num from dev.self_sku_pv 
@@ -58,14 +58,14 @@ brand_sku_num = hc.sql(brand_sku_num_query).coalesce(100).cache()
 
 
 # 计算重合度
-sku_match = sku_match.join(brand_sku_num,['item_third_cate_cd1','brand_code1'],'inner')
-sku_match = sku_match.withColumn('overlap_ratio',sku_match.match_sku_num/sku_match.sku_num)
+final_sku_match = sku_match.join(brand_sku_num,['item_third_cate_cd1','brand_code1'],'inner')
+final_sku_match = final_sku_match.withColumn('overlap_ratio',final_sku_match.match_sku_num/final_sku_match.sku_num)
 
-sku_match = sku_match.withColumnRenamed('item_third_cate_cd1','cid3')
-sku_match= sku_match[['cid3','brand_code1','brand_name1','brand_code2','brand_name2',
+final_sku_match = final_sku_match.withColumnRenamed('item_third_cate_cd1','cid3')
+final_sku_match= final_sku_match[['cid3','brand_code1','brand_name1','brand_code2','brand_name2',
                 'match_sku_num','sku_num','overlap_ratio']]
 # 保存到hive表
-hc.registerDataFrameAsTable(sku_match, "table1")
+hc.registerDataFrameAsTable(final_sku_match, "table1")
 insert_sql = '''insert overwrite table dev.dev_open_brand_similarity_spu_overlap_da partition(dt="%s") 
                 select * from table1'''%(dt)
 hc.sql(insert_sql)
