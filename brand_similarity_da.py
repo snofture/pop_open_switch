@@ -77,6 +77,43 @@ overlap = overlap.sort('cid3','brand_code_origin')
 overlap = overlap[['cid3','brand_code_origin','brand_code_similar','similarity_type']]
 
 
+
+
+
+
+# 读取 商家指定的相似商家
+def process_url(b):
+    x, y = b.split(':')
+    x = x[:4]
+    if y[-1] == '/':
+         y = y[:-1]
+    b = x + ':' + y
+    return str(b)
+remove_str = udf(lambda x: process_url(x), StringType())
+add_vender = hc.sql('select vender_id as pop_id_origin, similarity_url from fdm.fdm_dps_open_similarity_add_chain').distinct()
+add_vender = add_vender.withColumn('similarity_url',remove_str(add_vender.similarity_url))
+shop_inf = hc.sql('select vender_id as pop_id_similar ,shop_url as similarity_url from gdm.gdm_m01_vender_da where dt = "%s" '%(dt))
+add_vender = add_vender.join(shop_inf,'similarity_url','inner').select('pop_id_origin','pop_id_similar')
+add_vender = add_vender.withColumn('similarity_type',lit('4')).distinct()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 result = volumn.union(switch).union(overlap)
 result = result[result.brand_code_origin != result.brand_code_similar]
 hc.registerDataFrameAsTable(result, "table1")
