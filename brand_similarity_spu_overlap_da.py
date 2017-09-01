@@ -24,14 +24,15 @@ hc = HiveContext(sc)
 
 last_dt = hc.sql('select max(dt) from  dev.dev_self_vender_sku_match ').collect()[0][0]
 
-
-brand_mainsku_match = hc.sql('''select item_third_cate_cd1,main_sku_id1,brand_code1,brand_name1,main_sku_id2,brand_code2,brand_name2
+brand_mainsku_match = hc.sql('''select item_third_cate_cd1,main_sku_id1,brand_code1,brand_name1,
+                             item_third_cate_cd2,main_sku_id2,brand_code2,brand_name2
                              from dev.dev_self_vender_sku_match 
                              where item_third_cate_cd1 in (11924,11925,6739,11922,13550,11923)
                              and item_third_cate_cd2 in (11924,11925,6739,11922,13550,11923)
                              and dt == "%s" '''%(last_dt)).coalesce(100).cache()
 
-tmp_mainsku_match = hc.sql('''select item_third_cate_cd2 as item_third_cate_cd1, main_sku_id2 as main_sku_id1,brand_code2 as brand_code1,brand_name2 as brand_name1,
+tmp_mainsku_match = hc.sql('''select item_third_cate_cd2 as item_third_cate_cd1, main_sku_id2 as main_sku_id1,
+                           brand_code2 as brand_code1,brand_name2 as brand_name1,item_third_cate_cd1 as item_third_cate_cd2,
                            main_sku_id1 as main_sku_id2,brand_code1 as brand_code2,brand_name1 as brand_name2  
                             from dev.dev_self_vender_sku_match 
                             where item_third_cate_cd1 in (11924,11925,6739,11922,13550,11923)
@@ -39,7 +40,8 @@ tmp_mainsku_match = hc.sql('''select item_third_cate_cd2 as item_third_cate_cd1,
                             and dt == "%s" '''%(last_dt)).coalesce(100).cache()
 
 all_sku_match = brand_mainsku_match.union(tmp_mainsku_match)
-all_sku_match = all_sku_match.distinct()
+all_sku_match = all_sku_match.filter(all_sku_match.item_third_cate_cd1 == all_sku_match.item_third_cate_cd2)
+all_sku_match = all_sku_match.distinct().cache()
 
 
 # 汇总sku匹配数目
@@ -47,14 +49,15 @@ sku_match = all_sku_match.groupby('item_third_cate_cd1','brand_code1','brand_nam
 #sku_match = sku_match.sort('item_third_cate_cd1','brand_code1','match_sku_num')
 
 
-brand_sku_num_query = '''select cid3 as item_third_cate_cd1,brand_code as brand_code1, count(distinct sku_id)as sku_num from dev.self_sku_pv 
+#
+brand_sku_num_query = '''select cid3 as item_third_cate_cd1,brand_code as brand_code1, count(distinct sku_id)as sku_num 
+from dev.self_sku_pv 
 where sale_qtty > 0 and dt >= "%s" and dt <= "%s" 
 and cid3 in (11924,11925,6739,11922,13550,11923) group by cid3,brand_code''' % (begin_dt,dt)
 brand_sku_num = hc.sql(brand_sku_num_query).coalesce(100).cache()
 
 # 计算每个店铺有匹配关系的spu数目
 #shop_sku_num = all_sku_match.groupby('item_third_cate_cd1','brand_code1').agg(countDistinct(all_sku_match.main_sku_id1).alias('sku_num'))
-
 
 
 # 计算重合度

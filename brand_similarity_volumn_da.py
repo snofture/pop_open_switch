@@ -15,7 +15,7 @@ from pyspark.sql import Window
 from pyspark import SparkContext, SparkConf
 
 spark.conf.set("spark.sql.crossJoin.enabled", "true")
-sc = SparkContext(appName='caculate brand vender volumn similarity')
+sc = SparkContext(appName='calculate brand vender volumn similarity')
 hc = HiveContext(sc)
 
 
@@ -52,22 +52,27 @@ begin_dt = begin_dt.strftime('%Y-%m-%d')
 
 # 合并品牌商及其sku gmv
 #brand_gmv = top_brand_id.join(single_sku_gmv,'item_sku_id','inner')
-# 获取品牌商gmv信息
+
+
+# 获取在指定三级分类下每个品牌商的商品gmv数据
 brand_gmv_query = ''' select cid3, brand_code, gmv from dev.self_sku_pv
 where cid3 in (11924,11925,6739,11922,13550,11923) and dt >= '%s' and dt <= '%s'
 ''' % (begin_dt,dt)
 
 brand_gmv = hc.sql(brand_gmv_query).coalesce(50).distinct().cache()
-# 获取品牌商gmv
+# 获取在指定三级分类下每个品牌商的gmv
 top_brand_gmv = brand_gmv.groupby(['cid3','brand_code']).agg(sum('gmv').alias('brand_gmv')).cache()
 
 
-# 品牌商gmv排名
+# 在指定三级分类下品牌商gmv排名
 gmv_rank = Window.partitionBy('cid3').orderBy(top_brand_gmv.brand_gmv.desc())
 top_brand_gmv = top_brand_gmv.filter(top_brand_gmv.brand_gmv > 0).withColumn('gmv_rank',rank().over(gmv_rank))
 
 
 similar_top_brand_gmv=top_brand_gmv.withColumnRenamed('cid3','item_third_cate_cd').withColumnRenamed('brand_code','similar_brand_code').withColumnRenamed("gmv_rank", "similar_gmv_rank").withColumnRenamed("brand_gmv","similar_brand_gmv")
+#top_brand_gmv = top_brand_gmv.crossJoin(similar_top_brand_gmv).filter("(similar_gmv_rank>gmv_rank and similar_gmv_rank<=gmv_rank+10) or (similar_gmv_rank>=gmv_rank-10 and similar_gmv_rank<gmv_rank)")
+
+
 top_brand_gmv = top_brand_gmv.crossJoin(similar_top_brand_gmv).filter("(similar_gmv_rank>gmv_rank and similar_gmv_rank<=gmv_rank+10) or (similar_gmv_rank>=gmv_rank-10 and similar_gmv_rank<gmv_rank)")
 top_brand_gmv = top_brand_gmv.filter("cid3 == item_third_cate_cd")
 top_brand_gmv = top_brand_gmv[['cid3','brand_code','brand_gmv','gmv_rank','item_third_cate_cd','similar_brand_code','similar_brand_gmv','similar_gmv_rank']]

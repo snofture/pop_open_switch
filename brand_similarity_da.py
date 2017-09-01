@@ -40,7 +40,7 @@ switch_prob = switch.groupby(switch.cid3).agg(avg(switch.switch_prob).alias('cid
 switch = switch.join(switch_prob,'cid3','inner')
 
 
-switch = switch.filter((switch.switch_prob >= switch.cid3_avg_switch_prob) & (switch.switch_rank <= 10))
+switch = switch.filter((switch.switch_prob >= switch.cid3_avg_switch_prob) & (switch.switch_rank <= 20))
 switch = switch.withColumn('similarity_type',lit('1'))
 switch = switch.sort('cid3','brand_code_origin')
 switch = switch[['cid3','brand_code_origin','brand_code_similar','similarity_type']]
@@ -72,7 +72,7 @@ sku_overlap_ratio = overlap.groupby(overlap.cid3).agg(avg(overlap.overlap_ratio)
 overlap = overlap.join(sku_overlap_ratio,'cid3','inner')
 
 
-overlap = overlap.filter((overlap.overlap_ratio > overlap.cid3_avg_overlap_ratio) & (overlap.overlap_rank <= 50))
+overlap = overlap.filter((overlap.overlap_ratio > overlap.cid3_avg_overlap_ratio) & (overlap.overlap_rank <= 30))
 overlap = overlap.sort('cid3','brand_code_origin')
 overlap = overlap[['cid3','brand_code_origin','brand_code_similar','similarity_type']]
 
