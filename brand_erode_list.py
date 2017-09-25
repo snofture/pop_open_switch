@@ -30,7 +30,7 @@ switch = hc.sql('select * from app.app_cis_ai_slct_switching_prob where cid3 = "
 max_dt = hc.sql('select max(dt) from app.app_cis_ai_slct_switching_prob where cid3 = "%s" ' % (cid3)).collect()[0][0]
 switch = switch.filter(switch.dt == max_dt).cache()
 # 计算商品过去两年(一年)的gmv
-begin_dt = datetime.strptime(max_dt, '%Y-%m-%d') - timedelta(days=15)
+begin_dt = datetime.strptime(max_dt, '%Y-%m-%d') - timedelta(days=365)
 begin_dt = str(begin_dt.date())
 ord_data = hc.sql(''' select item_sku_id, after_prefr_amount from  dev.all_sku_order_det  
                        where dt >= "%s" and dt <= "%s" and item_third_cate_cd in ("%s") ''' % (begin_dt, max_dt, cid3)).coalesce(1000)
@@ -45,22 +45,32 @@ brand_switch = switch.join(brandd, 'src_item_id', 'inner').join(tmp_brand, 'dst_
 ##### 计算细分市场之间的替代性(A->B)(gvm 加权)
 brand_switch = brand_switch.withColumn('spend_switch', brand_switch.switching_prob * brand_switch.src_gmv)
 brand_switch = brand_switch.groupby(['cid3', 'src_brand_code','dst_brand_code']).agg(sum('spend_switch').alias('spend_switch'))
-brand_switch = brand_switch.withColumn('combine', concat(brand_switch.src_brand_code,brand_switch.dst_brand_code))
+brand_switch = brand_switch.withColumn('combine', concat(brand_switch.src_brand_code,brand_switch.dst_brand_code)).cache()
 
-
+# 创建结合key方法，A->B关联B->A替代金额
 tmp_brand_switch = brand_switch
 tmp_brand_switch = tmp_brand_switch.withColumn('tmp_combine',concat(tmp_brand_switch.dst_brand_code,tmp_brand_switch.src_brand_code))
 tmp_brand_switch = tmp_brand_switch.withColumnRenamed('spend_switch','tmp_spend_switch')
 tmp_brand_switch = tmp_brand_switch[['cid3','tmp_combine','tmp_spend_switch']]
 tmp_brand_switch = tmp_brand_switch.withColumnRenamed('tmp_combine','combine')
-tmp_brand_switch = tmp_brand_switch[['cid3','combine','tmp_spend_switch']]
+tmp_brand_switch = tmp_brand_switch[['cid3','combine','tmp_spend_switch']].cache()
 
 all_switch = brand_switch.join(tmp_brand_switch,['cid3','combine'],'inner')
 all_switch = all_switch[all_switch.src_brand_code != all_switch.dst_brand_code]
 all_switch = all_switch.withColumn('brand_to_brand_erode_amount',all_switch.spend_switch-all_switch.tmp_spend_switch)
 all_switch = all_switch.orderBy(all_switch.dst_brand_code)
 all_switch = all_switch.withColumn('dt', lit(dt))
-all_switch = all_switch[['cid3','src_brand_code','dst_brand_code','spend_switch','tmp_spend_switch','brand_to_brand_erode_amount','dt']]
+all_switch = all_switch[['cid3','src_brand_code','dst_brand_code','spend_switch','tmp_spend_switch','brand_to_brand_erode_amount','dt']].cache()
+
+# 关联品牌商名字
+brand = brand[['brand_code','barndname_full']].distinct()
+all_switch = all_switch.join(brand,all_switch.src_brand_code==brand.brand_code,'inner')
+all_switch = all_switch.withColumnRenamed('barndname_full','src_barndname_full')
+all_switch = all_switch[['cid3','src_brand_code','src_barndname_full','dst_brand_code','spend_switch','tmp_spend_switch','brand_to_brand_erode_amount','dt']]
+all_switch = all_switch.join(brand,all_switch.dst_brand_code==brand.brand_code,'inner')
+all_switch = all_switch.withColumnRenamed('barndname_full','dst_barndname_full')
+all_switch = all_switch.withColumnRenamed('spend_switch','src_to_dst').withColumnRenamed('tmp_spend_switch','dst_to_src').withColumnRenamed('brand_to_brand_erode_amount','dst_net_erode_amount')
+all_switch = all_switch[['cid3','src_brand_code','src_barndname_full','dst_brand_code','dst_barndname_full','src_to_dst','dst_to_src','dst_net_erode_amount','dt']]
 
 
 hc.sql("set hive.exec.dynamic.partition=true")
@@ -70,11 +80,13 @@ all_switch.write.insertInto('dev.dev_brand_erode_profile', overwrite=True)
 '''
 create table dev.dev_brand_erode_profile(
     cid3 string comment '三级分类',
-    src_brand_code string comment '被替代品牌商',
-    dst_brand_code string comment '替代品牌商',
-    spend_switch double comment 'dst对src蚕食金额',
-    tmp_spend_switch double comment 'src对dst蚕食金额',
-    brand_to_brand_erode_amount double comment 'dst对src净蚕食金额'
+    src_brand_code string comment 'src,被替代品牌商',
+    src_barndname_full string comment '被替代品牌商名字',
+    dst_brand_code string comment 'dst,替代品牌商',
+    dst_barndname_full string comment '替代品牌商名字',
+    src_to_dst double comment 'dst对src蚕食金额',
+    dst_to_src double comment 'src对dst蚕食金额',
+    dst_net_erode_amount double comment 'dst对src净蚕食金额'
 ) 
 PARTITIONED BY ( 
   `dt` string)

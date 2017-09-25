@@ -22,7 +22,7 @@ switch = hc.sql('select * from app.app_cis_ai_slct_switching_prob where cid3 = "
 max_dt = hc.sql('select max(dt) from app.app_cis_ai_slct_switching_prob where cid3 = "%s" ' % (cid3)).collect()[0][0]
 switch = switch.filter(switch.dt == max_dt).cache()
 # 计算商品过去两年(一年)的gmv
-begin_dt = datetime.strptime(max_dt, '%Y-%m-%d') - timedelta(days=15)
+begin_dt = datetime.strptime(max_dt, '%Y-%m-%d') - timedelta(days=365)
 begin_dt = str(begin_dt.date())
 ord_data = hc.sql(''' select item_sku_id, after_prefr_amount from  dev.all_sku_order_det  
                        where dt >= "%s" and dt <= "%s" and item_third_cate_cd in ("%s") ''' % (begin_dt, max_dt, cid3)).coalesce(1000)
@@ -37,14 +37,6 @@ brand_switch = switch.join(brandd, 'src_item_id', 'inner').join(tmp_brand, 'dst_
 ##### 计算细分市场之间的替代性(A->B)(gvm 加权)
 brand_switch = brand_switch.withColumn('spend_switch', brand_switch.switching_prob * brand_switch.src_gmv)
 brand_switch = brand_switch.groupby(['cid3', 'src_brand_code','dst_brand_code']).agg(sum('spend_switch').alias('spend_switch'))
-
-# 品牌商对市场的净蚕食金额
-attack = brand_switch.groupby(['cid3','dst_brand_code']).agg(sum('spend_switch').alias('attack_brand')).cache()
-hurt = brand_switch.groupby(['cid3','src_brand_code']).agg(sum('spend_switch').alias('hurt_brand')).cache()
-attack = attack.withColumnRenamed('dst_brand_code','brand_code')
-hurt = hurt.withColumnRenamed('src_brand_code','brand_code')
-erode = attack.join(hurt,['cid3','brand_code'],'inner')
-erode = erode.withColumn('erode_amount', erode.attack_brand - erode.hurt_brand).cache()
 
 # 汇总细分市场的被替代性
 all_switch_out = brand_switch.groupby(['src_brand_code']).agg(sum('spend_switch').alias('all_switch_out'))
@@ -66,16 +58,45 @@ market_gmv = market_gmv.withColumnRenamed('src_brand_code', 'dst_brand_code').ca
 #  计算转入度
 switch_in = switch_in.join(market_gmv, 'dst_brand_code', 'inner')
 switch_in = switch_in.withColumn('switch_in_prob', switch_in.switch_in_spend / switch_in.out_gmv).cache()
-####  品牌商对整个市场的净蚕食比例
-erode = erode.withColumn('erode_percentile',erode.erode_amount/all_gmv)
+####
+# 品牌商对市场的净蚕食金额
+attack = brand_switch.groupby(['cid3', 'dst_brand_code']).agg(sum('spend_switch').alias('attack_brand')).cache()
+a = attack[attack.dst_brand_code == '14539']
+hurt = brand_switch.groupby(['cid3', 'src_brand_code']).agg(sum('spend_switch').alias('hurt_brand')).cache()
+b = hurt[hurt.src_brand_code == '14539']
+attack = attack.withColumnRenamed('dst_brand_code', 'brand_code')
+hurt = hurt.withColumnRenamed('src_brand_code', 'brand_code')
+erode = attack.join(hurt, ['cid3', 'brand_code'], 'inner')
+erode = erode.withColumn('erode_amount', erode.attack_brand - erode.hurt_brand).cache()
+# 品牌商对整个市场的净蚕食比例
+#erode = erode.withColumn('erode_percentile',erode.erode_amount/all_gmv)
 ####  保存结果
 switch_in = switch_in[['dst_brand_code', 'cid3', 'switch_in_prob']].withColumnRenamed('dst_brand_code','brand_code')
 switch_out = switch_out[['src_brand_code', 'cid3', 'switch_out_prob','loyalty']].withColumnRenamed('src_brand_code','brand_code')
 result = switch_out.join(switch_in, ['cid3', 'brand_code'], 'inner')
+# 关联品牌商名字和对市场的净蚕食金额
 brand = brand[['brand_code','barndname_full']].distinct()
 result = result.join(brand,'brand_code','left').join(erode,['cid3','brand_code'],'left')
 result = result.withColumn('dt', lit(dt)).withColumn('cid3_name', lit(cid3_name)).withColumn('domain',lit('brand'))
-result = result[['cid3_name', 'domain', 'brand_code','barndname_full','switch_in_prob', 'switch_out_prob', 'loyalty','erode_percentile','dt', 'cid3']]
+result = result[['cid3_name', 'domain', 'brand_code','barndname_full','switch_in_prob', 'switch_out_prob', 'loyalty','erode_amount','dt', 'cid3']]
+
+max_in = result.agg({"switch_in_prob": "max"}).collect()[0][0]
+min_in = result.agg({"switch_in_prob": "min"}).collect()[0][0]
+switch_in=100*((result['switch_in_prob']-min_in)/(max_in-min_in))
+result = result.withColumn('switch_in_p',switch_in)
+
+max_out = result.agg({"switch_out_prob": "max"}).collect()[0][0]
+min_out = result.agg({"switch_out_prob": "min"}).collect()[0][0]
+switch_out=100*((result['switch_out_prob']-min_out)/(max_out-min_out))
+result = result.withColumn('switch_out_p',switch_out)
+
+max_l = result.agg({"loyalty": "max"}).collect()[0][0]
+min_l = result.agg({"loyalty": "min"}).collect()[0][0]
+loyalty_pr =100*((result['loyalty']-min_l)/(max_l-min_l))
+result = result.withColumn('loyalty_p',loyalty_pr)
+
+result = result[['cid3_name', 'domain', 'brand_code','barndname_full','switch_in_p', 'switch_out_p', 'loyalty_p','erode_amount','dt', 'cid3']]
+
 hc.sql("set hive.exec.dynamic.partition=true")
 hc.sql("set hive.exec.dynamic.partition.mode=nonstrict")
 result.write.insertInto('dev.dev_brand_compete_profile', overwrite=True)

@@ -69,15 +69,33 @@ def calcul_brand_competition(cid3,cid3_name):
     erode = attack.join(hurt, ['cid3', 'brand_code'], 'inner')
     erode = erode.withColumn('erode_amount', erode.attack_brand - erode.hurt_brand).cache()
     # 品牌商净蚕食市场比例
-    erode = erode.withColumn('erode_percentile', erode.erode_amount / all_gmv)
+    #erode = erode.withColumn('erode_percentile', erode.erode_amount / all_gmv)
     ####  保存结果
     switch_in = switch_in[['dst_brand_code', 'cid3', 'switch_in_prob']].withColumnRenamed('dst_brand_code','brand_code')
     switch_out = switch_out[['src_brand_code', 'cid3', 'switch_out_prob', 'loyalty']].withColumnRenamed('src_brand_code', 'brand_code')
     result = switch_out.join(switch_in, ['cid3', 'brand_code'], 'inner')
+    # 关联品牌商名字和对市场的净蚕食金额
     brand = brand[['brand_code', 'barndname_full']].distinct()
     result = result.join(brand, 'brand_code', 'left').join(erode,['cid3','brand_code'],'left')
     result = result.withColumn('dt', lit(dt)).withColumn('cid3_name', lit(cid3_name)).withColumn('domain', lit('brand'))
-    result = result[['cid3_name','domain','brand_code','barndname_full','switch_in_prob','switch_out_prob','loyalty','erode_percentile','dt','cid3']]
+    result = result[['cid3_name','domain','brand_code','barndname_full','switch_in_prob','switch_out_prob','loyalty','erode_amount','dt','cid3']]
+    # 归一化switch_in_prob
+    max_in = result.agg({"switch_in_prob": "max"}).collect()[0][0]
+    min_in = result.agg({"switch_in_prob": "min"}).collect()[0][0]
+    switch_in = 100 * ((result['switch_in_prob'] - min_in) / (max_in - min_in))
+    result = result.withColumn('switch_in_p', switch_in)
+    # 归一化switch_out_prob
+    max_out = result.agg({"switch_out_prob": "max"}).collect()[0][0]
+    min_out = result.agg({"switch_out_prob": "min"}).collect()[0][0]
+    switch_out = 100 * ((result['switch_out_prob'] - min_out) / (max_out - min_out))
+    result = result.withColumn('switch_out_p', switch_out)
+    # 归一化loyalty
+    max_l = result.agg({"loyalty": "max"}).collect()[0][0]
+    min_l = result.agg({"loyalty": "min"}).collect()[0][0]
+    loyalty_pr = 100 * ((result['loyalty'] - min_l) / (max_l - min_l))
+    result = result.withColumn('loyalty_p', loyalty_pr)
+    # 整理结果
+    result = result[['cid3_name', 'domain', 'brand_code', 'barndname_full', 'switch_in_p', 'switch_out_p', 'loyalty_p', 'erode_amount', 'dt', 'cid3']]
     hc.sql("set hive.exec.dynamic.partition=true")
     hc.sql("set hive.exec.dynamic.partition.mode=nonstrict")
     result.write.insertInto('dev.dev_brand_compete_profile', overwrite=True)
@@ -100,10 +118,10 @@ create table dev.dev_brand_compete_profile(
     domain string comment '领域，对应品牌',
     brand_code string comment '细分品牌商',
     barndname_full string comment '细分品牌商名字',
-    switch_in_prob double comment '品牌商转入度',
-    switch_out_prob double comment '品牌商转出度，被替代性',
-    loyalty double comment '品牌商忠诚度',
-    erode_percentile double comment '品牌商蚕食度，蚕食市场比例'
+    switch_in_p double comment '品牌商转入度',
+    switch_out_p double comment '品牌商转出度，被替代性',
+    loyalty_p double comment '品牌商忠诚度',
+    erode_amount double comment '品牌商蚕食度，蚕食市场比例'
 ) 
 PARTITIONED BY ( 
   `dt` string,
